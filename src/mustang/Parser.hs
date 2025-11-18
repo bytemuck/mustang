@@ -1,7 +1,11 @@
 module Mustang.Parser
   ( ParserM (..),
     ParseError (..),
+    ParserState (..),
     runParserM,
+    getInput,
+    setInput,
+    updatePosition,
   )
 where
 
@@ -10,19 +14,31 @@ import Control.Monad.Except
 import Control.Monad.IO.Class
 import Control.Monad.State
 
-data ParseError
-  = Empty
+data ParseError e
+  = UnexpectedEOI Integer Integer
+  | UnexpectedToken e Integer Integer
   | NoAlternative
   deriving (Show, Eq)
 
-newtype ParserM s a = ParserM
-  { unParserM :: StateT [s] (ExceptT ParseError IO) a
+data ParserState s = ParserState
+  { psInput :: [s],
+    psLine :: !Integer,
+    psCol :: !Integer
   }
-  deriving (MonadState [s], MonadError ParseError)
+  deriving (Show, Eq)
 
-runParserM :: ParserM s a -> [s] -> IO (Either ParseError (a, [s]))
-runParserM (ParserM m) input =
-  runExceptT (runStateT m input)
+newtype ParserM s a = ParserM
+  { unParserM :: StateT (ParserState s) (ExceptT (ParseError s) IO) a
+  }
+  deriving (MonadState (ParserState s), MonadError (ParseError s))
+
+runParserM :: ParserM s a -> [s] -> IO (Either (ParseError s) (a, [s]))
+runParserM (ParserM m) input = do
+  let initState = ParserState input 1 1
+  result <- runExceptT (runStateT m initState)
+  pure $ case result of
+    Left e -> Left e
+    Right (a, missing) -> Right (a, psInput missing)
 
 instance Functor (ParserM s) where
   fmap :: (a -> b) -> ParserM s a -> ParserM s b
@@ -51,3 +67,15 @@ instance Alternative (ParserM s) where
 instance MonadIO (ParserM s) where
   liftIO :: IO a -> ParserM s a
   liftIO io = ParserM $ liftIO io
+
+getInput :: ParserM s [s]
+getInput = gets psInput
+
+setInput :: [s] -> ParserM s ()
+setInput xs = do
+  st <- get
+  put st {psInput = xs}
+
+updatePosition :: Char -> Integer -> Integer -> (Integer, Integer)
+updatePosition '\n' ln _ = (ln + 1, 1)
+updatePosition _ ln col = (ln, col + 1)

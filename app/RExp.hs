@@ -27,14 +27,15 @@ data RExp
   | RLet String RExp
   | RSet String RExp
   | RIf RExp RExp RExp
-  | RWhen RExp RExp
-  | RParameter String
   | RPrimitive RPrimitive
   | RPrimitiveCall RPrimitiveCall
-  | RLambda String [String] [RExp]
-  | RLambdaCall String [RExp]
+  | RLambda Bool String [String] [RExp]
+  | RLambdaCall Bool String [RExp]
   | RResolveError String
+  | RDo [RExp]
   | RNil
+  | RParameter String
+  | RUnexpected
   deriving (Show, Eq)
 
 instance Show RPrimitive where
@@ -55,7 +56,9 @@ instance Eq RPrimitiveCall where
   _ == _ = False
 
 instance Show ([RExp] -> RExp) where
+  show :: ([RExp] -> RExp) -> String
   show _ = "<[RExp] -> RExp>"
 
 instance Eq ([RExp] -> RExp) where
+  (==) :: ([RExp] -> RExp) -> ([RExp] -> RExp) -> Bool
   _ == _ = False

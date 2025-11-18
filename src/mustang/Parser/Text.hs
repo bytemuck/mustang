@@ -22,7 +22,7 @@ digit = satisfy isDigit
 alphaNum :: ParserM Char Char
 alphaNum = alpha <|> digit
 
-string :: (Eq s) => [s] -> ParserM s [s]
+string :: [Char] -> ParserM Char [Char]
 string = foldr (\x -> (<*>) ((:) <$> token x)) (pure [])
 
 space :: ParserM Char Char

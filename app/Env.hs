@@ -1,6 +1,8 @@
 module Env
   ( Environment (..),
     lookupEnvironment,
+    lookupEnvironment1,
+    extendEnvironment,
     addBinding,
   )
 where
@@ -22,6 +24,14 @@ lookupEnvironment (ExtendEnvironment frame parent) variable =
     Nothing -> lookupEnvironment parent variable
   where
     value = Map.lookup variable frame
+
+extendEnvironment :: Environment a -> [String] -> [a] -> Environment a
+extendEnvironment environment parameters arguments =
+  ExtendEnvironment (Map.fromList (zip parameters arguments)) environment
+
+lookupEnvironment1 :: Environment a -> String -> Maybe a
+lookupEnvironment1 EmptyEnvironment _ = Nothing
+lookupEnvironment1 (ExtendEnvironment frame _) variable = Map.lookup variable frame
 
 addBinding :: Environment a -> String -> a -> Environment a
 addBinding EmptyEnvironment _ _ = EmptyEnvironment

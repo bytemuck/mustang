@@ -26,7 +26,9 @@ setEnv :: Environment a -> ResolveM a ()
 setEnv newEnv = ResolveM $ \_ -> pure (newEnv, ())
 
 withEnv :: Environment a -> ResolveM a b -> ResolveM a b
-withEnv newEnv (ResolveM f) = ResolveM $ \_ -> f newEnv
+withEnv newEnv (ResolveM f) = ResolveM $ \env -> do
+  (_, result) <- f newEnv
+  pure (env, result)
 
 instance Functor (ResolveM a) where
   fmap :: (b -> c) -> ResolveM a b -> ResolveM a c
@@ -83,7 +85,7 @@ pList l = RValue $ RList l
 pCompare :: (Integer -> Integer -> Bool) -> String -> [RExp] -> RExp
 pCompare fn name = \case
   [RValue (RNumber l), RValue (RNumber r)] -> RValue $ RBoolean (l `fn` r)
-  _ -> RResolveError $ name ++ "(>) can only compare numbers."
+  _ -> RResolveError $ name ++ " can only compare numbers."
 
 pEqual :: [RExp] -> RExp
 pEqual = pCompare (==) ">"
@@ -110,6 +112,30 @@ pPrintfnPrim exprs = do
   print exprs
   return RNil
 
+pHead :: [RExp] -> RExp
+pHead [RValue (RList [])] = RNil
+pHead [RValue (RList l)] = head l
+pHead _ = RNil
+
+pTail :: [RExp] -> RExp
+pTail [RValue (RList [])] = RNil
+pTail [RValue (RList l)] = RValue $ RList $ tail l
+pTail _ = RNil
+
+pCons :: [RExp] -> RExp
+pCons [v, RValue (RList r)] = RValue $ RList $ v : r
+pCons [v, RNil] = RValue $ RList [v]
+pCons _ = RNil
+
+pConcat :: [RExp] -> RExp
+pConcat [RValue (RList l), RValue (RList r)] = RValue $ RList $ l ++ r
+pConcat _ = RNil
+
+pNull :: [RExp] -> RExp
+pNull [RNil] = RValue $ RBoolean True
+pNull [RValue (RList [])] = RValue $ RBoolean True
+pNull _ = RValue $ RBoolean False
+
 primitives :: [(String, RExp)]
 primitives =
   [ ("+", RPrimitive $ RPrimitivePure "+" pSum),
@@ -123,26 +149,38 @@ primitives =
     ("<=", RPrimitive $ RPrimitivePure "<=" pLessEqual),
     ("list", RPrimitive $ RPrimitivePure "list" pList),
     ("print", RPrimitive $ RPrimitiveIO "print" pPrintPrim),
-    ("printfn", RPrimitive $ RPrimitiveIO "printfn" pPrintfnPrim)
+    ("printfn", RPrimitive $ RPrimitiveIO "printfn" pPrintfnPrim),
+    ("head", RPrimitive $ RPrimitivePure "head" pHead),
+    ("tail", RPrimitive $ RPrimitivePure "tail" pTail),
+    (":", RPrimitive $ RPrimitivePure ":" pCons),
+    ("++", RPrimitive $ RPrimitivePure ":" pConcat),
+    ("null", RPrimitive $ RPrimitivePure "null" pNull)
   ]
 
-resolve :: SExp -> ResolveM RExp RExp
-resolve (Atom (Number n)) = return $ RValue $ RNumber n
-resolve (Atom (Identifier name)) = do
+resolve :: LocatedSExp -> ResolveM RExp RExp
+resolve (LocatedSExp _ (Atom (Number n))) = return $ RValue $ RNumber n
+resolve (LocatedSExp _ (Atom (Identifier "nil"))) = return RNil
+resolve (LocatedSExp _ (Atom (Identifier name))) = do
   env <- getEnv
   case lookupEnvironment env name of
     Just _ -> return $ RBinding name
     Nothing -> return $ RResolveError $ "Unbound variable '" ++ name ++ "'"
-resolve (List (Atom (Identifier "if") : predicate : truty : [falsy])) = do
-  p <- resolve predicate
-  t <- resolve truty
-  f <- resolve falsy
+resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "do")) : body))) = do
+  newEnv <- getEnv
+  bodies <- withEnv newEnv $ mapM resolve body
+  return $ RDo bodies
+resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "if")) : predicate : truty : [falsy]))) = do
+  newEnv <- getEnv
+  p <- withEnv newEnv $ resolve predicate
+  t <- withEnv newEnv $ resolve truty
+  f <- withEnv newEnv $ resolve falsy
   return $ RIf p t f
-resolve (List (Atom (Identifier "when") : predicate : [truty])) = do
-  p <- resolve predicate
-  t <- resolve truty
-  return $ RWhen p t
-resolve (List (Atom (Identifier "set") : Atom (Identifier name) : [value])) = do
+resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "when")) : predicate : [truty]))) = do
+  newEnv <- getEnv
+  p <- withEnv newEnv $ resolve predicate
+  t <- withEnv newEnv $ resolve truty
+  return $ RIf p t RNil
+resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "set")) : LocatedSExp _ (Atom (Identifier name)) : [value]))) = do
   env <- getEnv
   case lookupEnvironment env name of
     Just _ -> do
@@ -150,28 +188,41 @@ resolve (List (Atom (Identifier "set") : Atom (Identifier name) : [value])) = do
       setEnv $ addBinding env name resolvedValue
       return $ RSet name resolvedValue
     Nothing -> return $ RResolveError $ "Unbound variable '" ++ name ++ "'"
-resolve (List (Atom (Identifier "let") : Atom (Identifier name) : [value])) = do
+resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "let")) : LocatedSExp _ (Atom (Identifier name)) : [value]))) = do
   env <- getEnv
   resolvedValue <- resolve value
   setEnv $ addBinding env name resolvedValue
   return $ RLet name resolvedValue
-resolve (List (Atom (Identifier "defunc") : Atom (Identifier name) : List params : body)) = do
-  let paramNames = [p | Atom (Identifier p) <- params]
+resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "defun")) : LocatedSExp _ (Atom (Identifier name)) : LocatedSExp _ (List params) : body))) = do
+  let paramNames = [p | LocatedSExp _ (Atom (Identifier p)) <- params]
   env <- getEnv
-  let lambdaEnv = foldl (\acc p -> addBinding acc p (RParameter p)) env paramNames
+  let partialEnv = addBinding env name (RLambda True name paramNames [])
+  let lambdaEnv = foldl (\acc p -> addBinding acc p (RParameter p)) partialEnv paramNames
   bodyR <- withEnv lambdaEnv $ mapM resolve body
-  let lambda = RLambda name paramNames bodyR
+  let isPure = all (checkPure env) bodyR
+  let lambda = RLambda isPure name paramNames bodyR
   setEnv $ addBinding env name lambda
   return lambda
-resolve (List (Atom (Identifier name) : args)) = do
-  resolvedArgs <- mapM resolve args
+  where
+    checkPure oldEnv = \case
+      (RBinding bindingName) -> case lookupEnvironment oldEnv bindingName of
+        Just _ -> False
+        Nothing -> True
+      (RSet _ _) -> False
+      (RPrimitiveCall (RPrimitiveCallIO _ _ rexprs')) -> all (checkPure oldEnv) rexprs'
+      (RPrimitiveCall (RPrimitiveCallPure _ _ rexprs')) -> all (checkPure oldEnv) rexprs'
+      (RLambdaCall isPure _ rexprs') -> isPure && all (checkPure oldEnv) rexprs'
+      _ -> True
+resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier name)) : args))) = do
   env <- getEnv
+  resolvedArgs <- withEnv env $ mapM resolve args
   case lookupEnvironment env name of
     Just (RPrimitive (RPrimitivePure fnName f)) -> return $ RPrimitiveCall $ RPrimitiveCallPure fnName f resolvedArgs
     Just (RPrimitive (RPrimitiveIO fnName f)) -> return $ RPrimitiveCall $ RPrimitiveCallIO fnName f resolvedArgs
-    Just (RLambda lambdaName _ _) -> return $ RLambdaCall lambdaName resolvedArgs
+    Just (RParameter fnName) -> return $ RLambdaCall False fnName resolvedArgs
+    Just (RLambda isPure lambdaName _ _) -> return $ RLambdaCall isPure lambdaName resolvedArgs
     _ -> return $ RResolveError $ "Could not resolve " ++ name ++ " with " ++ show resolvedArgs
 resolve expr = return $ RResolveError $ show expr
 
-resolveMany :: [SExp] -> ResolveM RExp [RExp]
+resolveMany :: [LocatedSExp] -> ResolveM RExp [RExp]
 resolveMany = mapM resolve
