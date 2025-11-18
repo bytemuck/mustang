@@ -105,6 +105,12 @@ eval (RLambdaCall _ name params) = do
       let lambdaEnv = extendEnvironment env paramNames evaluatedArgs
       evaluatedBody <- withEnv lambdaEnv $ evalMany content
       return $ last evaluatedBody
+    RPrimitive (RPrimitiveIO _ fn) -> do
+      evaluatedArgs <- mapM eval params
+      liftIO $ fn evaluatedArgs
+    RPrimitive (RPrimitivePure _ fn) -> do
+      evaluatedArgs <- mapM eval params
+      return $ fn evaluatedArgs
     _ -> return RUnexpected
 eval e@(RResolveError _) = return e
 eval RNil = return RNil

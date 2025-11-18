@@ -1,0 +1,10 @@
+(defun map (f l)
+    (if (null l) 
+        nil
+        (:
+            (f (head l)) 
+            (map f (tail l))
+        )
+    )
+)
+

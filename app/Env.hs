@@ -3,10 +3,13 @@ module Env
     lookupEnvironment,
     lookupEnvironment1,
     extendEnvironment,
+    frameEnvironment,
+    mergeFrame,
     addBinding,
   )
 where
 
+import Data.Map (unionWith)
 import Data.Map qualified as Map
 
 type Frame a = Map.Map String a
@@ -28,6 +31,13 @@ lookupEnvironment (ExtendEnvironment frame parent) variable =
 extendEnvironment :: Environment a -> [String] -> [a] -> Environment a
 extendEnvironment environment parameters arguments =
   ExtendEnvironment (Map.fromList (zip parameters arguments)) environment
+
+mergeFrame :: Frame a -> Frame a -> Frame a
+mergeFrame = unionWith const
+
+frameEnvironment :: Environment a -> Frame a
+frameEnvironment (ExtendEnvironment frame _) = frame
+frameEnvironment EmptyEnvironment = Map.empty
 
 lookupEnvironment1 :: Environment a -> String -> Maybe a
 lookupEnvironment1 EmptyEnvironment _ = Nothing

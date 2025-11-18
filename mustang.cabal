@@ -36,6 +36,7 @@ executable mustang
     Resolve
     RExp
     SExp
+    UML
   default-language: GHC2024
   build-depends:
     , base  ^>=4.21.0.0

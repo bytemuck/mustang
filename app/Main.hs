@@ -1,14 +1,20 @@
 module Main where
 
 import Control.Applicative
+import Env
+  ( Environment (EmptyEnvironment, ExtendEnvironment),
+    frameEnvironment,
+  )
 import Evaluate (EvalM (runEvalM), evalMany)
 import Lex
 import Mustang.Parser
 import RExp
 import Resolve
 import System.Environment (getArgs)
+import System.Exit (exitFailure)
 import System.IO
 import Text.Pretty.Simple
+import UML
 import Prelude hiding (div)
 
 main :: IO ()
@@ -18,16 +24,39 @@ main = do
   handle <- openFile path ReadMode
   input <- hGetContents handle
 
+  mapHandle <- openFile "resources/std/map.mu" ReadMode
+  mapInput <- hGetContents mapHandle
+  parsedMap <- runParserM (many expression) mapInput
+
+  reduceHandle <- openFile "resources/std/reduce.mu" ReadMode
+  reduceInput <- hGetContents reduceHandle
+  parsedReduce <- runParserM (many expression) reduceInput
+
+  (stdEnv, mapR, redR) <- case (parsedMap, parsedReduce) of
+    (Right mapP, Right redP) -> do
+      (mapEnv, mapResolved) <- runResolveM (resolveMany $ fst mapP) coreEnvironment
+      (redEnv, redResolved) <- runResolveM (resolveMany $ fst redP) (ExtendEnvironment (frameEnvironment mapEnv) EmptyEnvironment)
+      return (redEnv, mapResolved, redResolved)
+    _ -> exitFailure
+
   parsed <- runParserM (many expression) input
 
   case parsed of
     Left err -> pPrint $ "Parse error: " ++ show err
     Right (sexps, []) -> do
-      (_, rR) <- runResolveM (resolveMany sexps) coreEnvironment
+      (_, rR) <- runResolveM (resolveMany sexps) (ExtendEnvironment (frameEnvironment stdEnv) EmptyEnvironment)
+
+      -- plant uml with 'rR'
+
+      result <- umlMany rR
+      let (bodies, links) = (concatMap fst result, concat $ concatMap snd result)
+
+      pPrint bodies
+      pPrint links
 
       case collectErrors rR of
         [] -> do
-          _ <- runEvalM (evalMany rR) coreEnvironment
+          _ <- runEvalM (evalMany (mapR ++ redR ++ rR)) coreEnvironment
           return ()
         e -> do
           pPrint e
