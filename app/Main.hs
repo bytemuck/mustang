@@ -41,22 +41,33 @@ main = do
 
   parsed <- runParserM (many expression) input
 
+  umlHandle <- openFile "output/uml.txt" WriteMode
+  hSetFileSize umlHandle 0
+
+  stackHandle <- openFile "output/stack.txt" WriteMode
+  hSetFileSize stackHandle 0
+
   case parsed of
     Left err -> pPrint $ "Parse error: " ++ show err
     Right (sexps, []) -> do
-      (_, rR) <- runResolveM (resolveMany sexps) (ExtendEnvironment (frameEnvironment stdEnv) EmptyEnvironment)
+      (envR, rR) <- runResolveM (resolveMany sexps) (ExtendEnvironment (frameEnvironment stdEnv) EmptyEnvironment)
 
-      -- plant uml with 'rR'
+      result <- umlMany (rR, envR, Nothing)
 
-      result <- umlMany rR
-      let (bodies, links) = (concatMap fst result, concat $ concatMap snd result)
+      let (bodies, links) = (concatMap fst' result, concat $ concatMap snd' result)
 
-      pPrint bodies
       pPrint links
+
+      hPutStrLn umlHandle bodies
+      hPutStrLn umlHandle links
+      hFlush stackHandle
+      hClose umlHandle
 
       case collectErrors rR of
         [] -> do
-          _ <- runEvalM (evalMany (mapR ++ redR ++ rR)) coreEnvironment
+          _ <- runEvalM (evalMany (mapR ++ redR ++ rR)) (coreEnvironment, stackHandle)
+          hFlush stackHandle
+          hClose stackHandle
           return ()
         e -> do
           pPrint e

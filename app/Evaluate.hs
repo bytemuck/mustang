@@ -9,11 +9,13 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Data.Maybe qualified
 import Env
+import GHC.IO.Handle (Handle, hFlush)
 import RExp
 import System.Exit
+import System.IO (hPutStrLn)
 import Text.Pretty.Simple (pPrint)
 
-newtype EvalM a b = EvalM {runEvalM :: Environment a -> IO (Environment a, b)}
+newtype EvalM a b = EvalM {runEvalM :: (Environment a, Handle) -> IO (Environment a, b)}
 
 instance Functor (EvalM a) where
   fmap :: (b -> c) -> EvalM a b -> EvalM a c
@@ -23,30 +25,33 @@ instance Functor (EvalM a) where
 
 instance Applicative (EvalM a) where
   pure :: b -> EvalM a b
-  pure x = EvalM $ \env -> pure (env, x)
+  pure x = EvalM $ \(env, _) -> pure (env, x)
   (<*>) :: EvalM a (b -> c) -> EvalM a b -> EvalM a c
   (<*>) = ap
 
 instance Monad (EvalM a) where
   (>>=) :: EvalM a b -> (b -> EvalM a c) -> EvalM a c
-  (EvalM f) >>= g = EvalM $ \env -> do
-    (env', x) <- f env
-    runEvalM (g x) env'
+  (EvalM f) >>= g = EvalM $ \(env, handle) -> do
+    (env', x) <- f (env, handle)
+    runEvalM (g x) (env', handle)
 
 instance MonadIO (EvalM a) where
   liftIO :: IO b -> EvalM a b
-  liftIO action = EvalM $ \env -> do
+  liftIO action = EvalM $ \(env, _) -> do
     x <- action
     pure (env, x)
 
 getEnv :: EvalM a (Environment a)
-getEnv = EvalM $ \env -> pure (env, env)
+getEnv = EvalM $ \(env, _) -> pure (env, env)
 
 setEnv :: Environment a -> EvalM a ()
 setEnv newEnv = EvalM $ \_ -> pure (newEnv, ())
 
 withEnv :: Environment a -> EvalM a b -> EvalM a b
-withEnv newEnv (EvalM f) = EvalM $ \_ -> f newEnv
+withEnv newEnv (EvalM f) = EvalM $ \(_, handle) -> f (newEnv, handle)
+
+getHandle :: EvalM a Handle
+getHandle = EvalM $ \(env, handle) -> return (env, handle)
 
 lookupEnvironment' :: Environment RExp -> String -> RExp
 lookupEnvironment' env name = Data.Maybe.fromMaybe RUnexpected (lookupEnvironment env name)
@@ -57,6 +62,9 @@ isTruthy (RValue (RNumber n)) = n /= 0
 isTruthy RNil = False
 isTruthy (RValue (RList xs)) = not (null xs)
 isTruthy _ = True
+
+skipStack :: [String]
+skipStack = ["tail", "head", "++", ":", "null", "foldl", "map1"]
 
 eval :: RExp -> EvalM RExp RExp
 eval r@(RValue _) = return r
@@ -85,31 +93,45 @@ eval (RIf condition truthy falsy) = do
     then eval truthy
     else eval falsy
 eval (RPrimitiveCall call) = do
+  handle <- getHandle
   env <- getEnv
   case call of
-    RPrimitiveCallIO _ func params -> do
+    RPrimitiveCallIO name func params -> do
+      let stack = name ++ ": " ++ show params
       evaluated <- withEnv env $ evalMany params
+      unless (name `elem` skipStack) $ liftIO $ hPutStrLn handle stack
       liftIO $ func evaluated
-    RPrimitiveCallPure _ func params -> do
+    RPrimitiveCallPure name func params -> do
+      let stack = name ++ ": " ++ show params
       evaluated <- withEnv env $ evalMany params
-      return $ func evaluated
+      unless (name `elem` skipStack) $ liftIO $ hPutStrLn handle stack
+      let retState = func evaluated
+      return retState
 eval l@(RLambda _ name _ _) = do
   env <- getEnv
   setEnv $ addBinding env name l
   return l
 eval (RLambdaCall _ name params) = do
+  handle <- getHandle
   env <- getEnv
   case lookupEnvironment' env name of
-    RLambda _ _ paramNames content -> do
+    RLambda _ name' paramNames content -> do
+      let stack = name' ++ ": " ++ show params
       evaluatedArgs <- mapM eval params
+      unless (name `elem` skipStack) $ liftIO $ hPutStrLn handle stack
       let lambdaEnv = extendEnvironment env paramNames evaluatedArgs
       evaluatedBody <- withEnv lambdaEnv $ evalMany content
-      return $ last evaluatedBody
-    RPrimitive (RPrimitiveIO _ fn) -> do
+      let retState = last evaluatedBody
+      return retState
+    RPrimitive (RPrimitiveIO name' fn) -> do
+      let stack = name' ++ ": " ++ show params
       evaluatedArgs <- mapM eval params
+      liftIO $ hPutStrLn handle stack
       liftIO $ fn evaluatedArgs
-    RPrimitive (RPrimitivePure _ fn) -> do
+    RPrimitive (RPrimitivePure name' fn) -> do
+      let stack = name' ++ ": " ++ show params
       evaluatedArgs <- mapM eval params
+      liftIO $ hPutStrLn handle stack
       return $ fn evaluatedArgs
     _ -> return RUnexpected
 eval e@(RResolveError _) = return e

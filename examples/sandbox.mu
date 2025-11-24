@@ -1,6 +1,6 @@
 (defun add-taxes (price) 
     (+ price
-        (/ (* price 15)100))) 
+        (/ (* price 15) 100))) 
     
 (defun calculate (prices taxable?) 
     (let prices-with-tax 
@@ -10,4 +10,7 @@
         ) 
 
     (reduce + prices-with-tax)
-) 
+)
+
+
+(calculate (list 100 5 15) 1)
