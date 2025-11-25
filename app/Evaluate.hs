@@ -1,3 +1,5 @@
+-- stackShow (RLambdaCall _ name params, env) = name ++ " : [" ++ concatMap (\rexp -> stackShow (rexp, env) ++ ",") params ++ "]"
+
 module Evaluate
   ( EvalM (..),
     eval,
@@ -7,13 +9,14 @@ where
 
 import Control.Monad
 import Control.Monad.IO.Class
+import Data.List (intercalate)
 import Data.Maybe qualified
 import Env
-import GHC.IO.Handle (Handle, hFlush)
+import GHC.IO.Handle
 import RExp
 import System.Exit
-import System.IO (hPutStrLn)
-import Text.Pretty.Simple (pPrint)
+import System.IO
+import Text.Pretty.Simple
 
 newtype EvalM a b = EvalM {runEvalM :: (Environment a, Handle) -> IO (Environment a, b)}
 
@@ -66,6 +69,41 @@ isTruthy _ = True
 skipStack :: [String]
 skipStack = ["tail", "head", "++", ":", "null", "foldl", "map1"]
 
+tabString :: Int -> String
+tabString x = replicate x '\t'
+
+stackShow :: (RExp, Int, [RExp], Environment RExp) -> String
+stackShow (RValue n, tabs, ea, env) = stackShow' (n, tabs, ea, env)
+stackShow (RBinding n, tabs, ea, env) = do
+  let v = lookupEnvironment' env n
+  stackShow (v, tabs, ea, env)
+stackShow (RPrimitiveCall (RPrimitiveCallPure name _ _), tabs, ea, env) = do
+  let newParams = zipWith (\x y -> "P" ++ x ++ " = " ++ stackShow (y, tabs, ea, env)) (map show [(1 :: Integer) ..]) ea
+  tabString tabs ++ name ++ " : [" ++ intercalate ", " newParams ++ "]"
+stackShow (RPrimitiveCall (RPrimitiveCallIO name _ _), tabs, ea, env) = do
+  let newParams = zipWith (\x y -> "P" ++ x ++ " = " ++ stackShow (y, tabs, ea, env)) (map show [(1 :: Integer) ..]) ea
+  tabString tabs ++ name ++ " : [" ++ intercalate ", " newParams ++ "]"
+stackShow (RLambdaCall _ name _, tabs, ea, env) = do
+  (newName, names) <- case lookupEnvironment' env name of
+    RLambda _ newName paramNames _ -> return (newName, paramNames)
+    RPrimitive (RPrimitivePure newName _) -> return (newName, map (\x -> 'P' : show x) [(1 :: Integer) ..])
+    RPrimitive (RPrimitiveIO newName _) -> return (newName, map (\x -> 'P' : show x) [(1 :: Integer) ..])
+    _ -> return ("", [] :: [String])
+
+  let newParams = zipWith (\x y -> x ++ " = " ++ stackShow (y, tabs, ea, env)) names ea
+  tabString tabs ++ newName ++ " : [" ++ intercalate ", " newParams ++ "]"
+stackShow (RLambda _ name _ _, _, _, _) = name
+stackShow (RPrimitive (RPrimitiveIO name _), _, _, _) = name
+stackShow (RPrimitive (RPrimitivePure name _), _, _, _) = name
+stackShow (RNil, _, _, _) = "nil"
+stackShow _ = "unknown"
+
+stackShow' :: (RValue, Int, [RExp], Environment RExp) -> String
+stackShow' (RNumber n, _, _, _) = show n
+stackShow' (RString s, _, _, _) = s
+stackShow' (RBoolean b, _, _, _) = show b
+stackShow' (RList l, tabs, ea, env) = "(" ++ intercalate ", " (map (\rexp -> stackShow (rexp, tabs, ea, env)) l) ++ ")"
+
 eval :: RExp -> EvalM RExp RExp
 eval r@(RValue _) = return r
 eval (RBinding binding) = do
@@ -92,47 +130,57 @@ eval (RIf condition truthy falsy) = do
   if isTruthy result
     then eval truthy
     else eval falsy
-eval (RPrimitiveCall call) = do
+eval p@(RPrimitiveCall call) = do
   handle <- getHandle
   env <- getEnv
+  let stackSize = countScope env
   case call of
-    RPrimitiveCallIO name func params -> do
-      let stack = name ++ ": " ++ show params
+    (RPrimitiveCallIO name func params) -> do
       evaluated <- withEnv env $ evalMany params
+      let stack = stackShow (p, countScope env, evaluated, env)
       unless (name `elem` skipStack) $ liftIO $ hPutStrLn handle stack
-      liftIO $ func evaluated
-    RPrimitiveCallPure name func params -> do
-      let stack = name ++ ": " ++ show params
+      retState <- liftIO $ func evaluated
+      unless (name `elem` skipStack) $ liftIO $ hPutStrLn handle (tabString (stackSize + 1) ++ "Returns = " ++ stackShow (retState, stackSize, [], env))
+      return retState
+    (RPrimitiveCallPure name func params) -> do
       evaluated <- withEnv env $ evalMany params
+      let stack = stackShow (p, countScope env, evaluated, env)
       unless (name `elem` skipStack) $ liftIO $ hPutStrLn handle stack
       let retState = func evaluated
+      unless (name `elem` skipStack) $ liftIO $ hPutStrLn handle (tabString (stackSize + 1) ++ "Returns = " ++ stackShow (retState, stackSize, [], env))
       return retState
 eval l@(RLambda _ name _ _) = do
   env <- getEnv
   setEnv $ addBinding env name l
   return l
-eval (RLambdaCall _ name params) = do
+eval p@(RLambdaCall _ name params) = do
   handle <- getHandle
   env <- getEnv
+  let stackSize = countScope env
   case lookupEnvironment' env name of
-    RLambda _ name' paramNames content -> do
-      let stack = name' ++ ": " ++ show params
+    RLambda _ _ paramNames content -> do
       evaluatedArgs <- mapM eval params
+      let stack = stackShow (p, stackSize, evaluatedArgs, env)
       unless (name `elem` skipStack) $ liftIO $ hPutStrLn handle stack
       let lambdaEnv = extendEnvironment env paramNames evaluatedArgs
       evaluatedBody <- withEnv lambdaEnv $ evalMany content
       let retState = last evaluatedBody
+      unless (name `elem` skipStack) $ liftIO $ hPutStrLn handle (tabString (stackSize + 1) ++ "Returns = " ++ stackShow (retState, stackSize, [], env))
       return retState
-    RPrimitive (RPrimitiveIO name' fn) -> do
-      let stack = name' ++ ": " ++ show params
+    RPrimitive (RPrimitiveIO _ fn) -> do
       evaluatedArgs <- mapM eval params
+      let stack = stackShow (p, stackSize, evaluatedArgs, env)
       liftIO $ hPutStrLn handle stack
-      liftIO $ fn evaluatedArgs
-    RPrimitive (RPrimitivePure name' fn) -> do
-      let stack = name' ++ ": " ++ show params
+      retState <- liftIO $ fn evaluatedArgs
+      liftIO $ hPutStrLn handle (tabString (stackSize + 1) ++ "Returns = " ++ stackShow (retState, stackSize, [], env))
+      return retState
+    RPrimitive (RPrimitivePure _ fn) -> do
       evaluatedArgs <- mapM eval params
+      let stack = stackShow (p, stackSize, evaluatedArgs, env)
       liftIO $ hPutStrLn handle stack
-      return $ fn evaluatedArgs
+      let retState = fn evaluatedArgs
+      liftIO $ hPutStrLn handle (tabString (stackSize + 1) ++ "Returns = " ++ stackShow (retState, stackSize, [], env))
+      return retState
     _ -> return RUnexpected
 eval e@(RResolveError _) = return e
 eval RNil = return RNil

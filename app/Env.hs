@@ -6,6 +6,7 @@ module Env
     frameEnvironment,
     mergeFrame,
     addBinding,
+    countScope,
   )
 where
 
@@ -49,3 +50,9 @@ addBinding (ExtendEnvironment frame parent) name value =
   ExtendEnvironment newFrame parent
   where
     newFrame = Map.insert name value frame
+
+countScope :: Environment a -> Int
+countScope env = countScope' env (-1)
+  where
+    countScope' EmptyEnvironment depth = depth
+    countScope' (ExtendEnvironment _ parent) depth = countScope' parent (depth + 1)

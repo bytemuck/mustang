@@ -9,6 +9,7 @@ where
 
 import Control.Monad
 import Control.Monad.IO.Class
+import Data.List
 import Data.Map qualified as Map
 import Env
 import RExp
@@ -54,6 +55,13 @@ instance MonadIO (ResolveM a) where
   liftIO action = ResolveM $ \env -> do
     x <- action
     pure (env, x)
+
+pShow :: RExp -> String
+pShow (RValue (RNumber n)) = show n
+pShow (RValue (RString n)) = n
+pShow (RValue (RBoolean n)) = show n
+pShow (RValue (RList p)) = "(" ++ intercalate ", " (map pShow p) ++ ")"
+pShow _ = "<what?>"
 
 pBinary :: ([Integer] -> Integer) -> String -> ([RExp] -> RExp)
 pBinary fn name = \case
@@ -104,12 +112,12 @@ pLessEqual = pCompare (<=) ">"
 
 pPrintPrim :: [RExp] -> IO RExp
 pPrintPrim exprs = do
-  putStr $ show exprs
+  putStr $ intercalate ", " (map pShow exprs)
   return RNil
 
 pPrintfnPrim :: [RExp] -> IO RExp
 pPrintfnPrim exprs = do
-  print exprs
+  putStrLn $ intercalate ", " (map pShow exprs)
   return RNil
 
 pHead :: [RExp] -> RExp
@@ -159,6 +167,7 @@ primitives =
 
 resolve :: LocatedSExp -> ResolveM RExp RExp
 resolve (LocatedSExp _ (Atom (Number n))) = return $ RValue $ RNumber n
+resolve (LocatedSExp _ (Atom (String s))) = return $ RValue $ RString s
 resolve (LocatedSExp _ (Atom (Identifier "nil"))) = return RNil
 resolve (LocatedSExp _ (Atom (Identifier name))) = do
   env <- getEnv

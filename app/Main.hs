@@ -1,6 +1,7 @@
 module Main where
 
 import Control.Applicative
+import Data.List (group, nub, sort)
 import Env
   ( Environment (EmptyEnvironment, ExtendEnvironment),
     frameEnvironment,
@@ -15,7 +16,9 @@ import System.Exit (exitFailure)
 import System.IO
 import Text.Pretty.Simple
 import UML
-import Prelude hiding (div)
+
+rmdups :: (Ord a) => [a] -> [a]
+rmdups = map head . group . sort
 
 main :: IO ()
 main = do
@@ -54,12 +57,10 @@ main = do
 
       result <- umlMany (rR, envR, Nothing)
 
-      let (bodies, links) = (concatMap fst' result, concat $ concatMap snd' result)
-
-      pPrint links
+      let (bodies, links) = (concatMap fst' result, concatMap snd' result)
 
       hPutStrLn umlHandle bodies
-      hPutStrLn umlHandle links
+      hPutStrLn umlHandle $ concat (rmdups links)
       hFlush stackHandle
       hClose umlHandle
 
