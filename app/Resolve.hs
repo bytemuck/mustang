@@ -14,6 +14,7 @@ import Data.Map qualified as Map
 import Env
 import RExp
 import SExp
+import Text.Pretty.Simple (pPrint)
 
 coreEnvironment :: Environment RExp
 coreEnvironment = ExtendEnvironment (Map.fromList primitives) EmptyEnvironment
@@ -213,23 +214,26 @@ resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "defun")) : Locate
   setEnv $ addBinding env name lambda
   return lambda
   where
-    checkPure oldEnv = \case
-      (RBinding bindingName) -> case lookupEnvironment oldEnv bindingName of
-        Just _ -> False
-        Nothing -> True
-      (RSet _ _) -> False
-      (RPrimitiveCall (RPrimitiveCallIO _ _ rexprs')) -> all (checkPure oldEnv) rexprs'
-      (RPrimitiveCall (RPrimitiveCallPure _ _ rexprs')) -> all (checkPure oldEnv) rexprs'
-      (RLambdaCall isPure _ rexprs') -> isPure && all (checkPure oldEnv) rexprs'
-      _ -> True
+    checkPure oldEnv =
+      \case
+        (RBinding bindingName) -> case lookupEnvironment oldEnv bindingName of
+          Just (RLambda isPure _ _ _) -> isPure
+          Just (RPrimitive _) -> True
+          Just _ -> False
+          Nothing -> True
+        (RSet _ _) -> False
+        (RPrimitiveCall (RPrimitiveCallIO _ _ rexprs')) -> all (checkPure oldEnv) rexprs'
+        (RPrimitiveCall (RPrimitiveCallPure _ _ rexprs')) -> all (checkPure oldEnv) rexprs'
+        (RLambdaCall _ rexprs') -> all (checkPure oldEnv) rexprs'
+        _ -> True
 resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier name)) : args))) = do
   env <- getEnv
   resolvedArgs <- withEnv env $ mapM resolve args
   case lookupEnvironment env name of
     Just (RPrimitive (RPrimitivePure fnName f)) -> return $ RPrimitiveCall $ RPrimitiveCallPure fnName f resolvedArgs
     Just (RPrimitive (RPrimitiveIO fnName f)) -> return $ RPrimitiveCall $ RPrimitiveCallIO fnName f resolvedArgs
-    Just (RParameter fnName) -> return $ RLambdaCall False fnName resolvedArgs
-    Just (RLambda isPure lambdaName _ _) -> return $ RLambdaCall isPure lambdaName resolvedArgs
+    Just (RParameter fnName) -> return $ RLambdaCall fnName resolvedArgs
+    Just (RLambda _ lambdaName _ _) -> return $ RLambdaCall lambdaName resolvedArgs
     _ -> return $ RResolveError $ "Could not resolve " ++ name ++ " with " ++ show resolvedArgs
 resolve expr = return $ RResolveError $ show expr
 

@@ -31,13 +31,13 @@ uml (RBinding name, env, Just _) (bodies, links) = do
     Just (RLambda _ lambdaName _ _) -> do
       return (bodies, lambdaName : links, Just name)
     _ -> return (bodies, links, Just name)
-uml (RLambdaCall _ name@"reduce" params, env, p@(Just _)) (bodies, links) = do
+uml (RLambdaCall name@"reduce" params, env, p@(Just _)) (bodies, links) = do
   tuples <- umlMany (params, env, p)
   return (bodies, concatMap snd' tuples ++ links, Just name)
-uml (RLambdaCall _ name@"map" params, env, p@(Just _)) (bodies, links) = do
+uml (RLambdaCall name@"map" params, env, p@(Just _)) (bodies, links) = do
   tuples <- umlMany (params, env, p)
   return (bodies, concatMap snd' tuples ++ links, Just name)
-uml (RLambdaCall _ name params, env, p@(Just _)) (bodies, links) = do
+uml (RLambdaCall name params, env, p@(Just _)) (bodies, links) = do
   tuples <- umlMany (params, env, p)
   return (bodies, name : concatMap snd' tuples ++ links, p)
 uml (RPrimitiveCall (RPrimitiveCallIO name _ params), env, p@(Just _)) (bodies, links) = do

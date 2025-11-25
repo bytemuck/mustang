@@ -30,7 +30,7 @@ data RExp
   | RPrimitive RPrimitive
   | RPrimitiveCall RPrimitiveCall
   | RLambda Bool String [String] [RExp]
-  | RLambdaCall Bool String [RExp]
+  | RLambdaCall String [RExp]
   | RResolveError String
   | RDo [RExp]
   | RNil

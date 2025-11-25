@@ -1,12 +1,13 @@
 module Main where
 
 import Control.Applicative
-import Data.List (group, nub, sort)
+import Data.List (group, sort)
 import Env
   ( Environment (EmptyEnvironment, ExtendEnvironment),
     frameEnvironment,
   )
 import Evaluate (EvalM (runEvalM), evalMany)
+import GHC.Base (when)
 import Lex
 import Mustang.Parser
 import RExp
@@ -20,9 +21,14 @@ import UML
 rmdups :: (Ord a) => [a] -> [a]
 rmdups = map head . group . sort
 
+calculateArgs :: [String] -> (String, Bool)
+calculateArgs (path : "showtree" : _) = (path, True)
+calculateArgs (path : _) = (path, False)
+
 main :: IO ()
 main = do
-  [path] <- getArgs
+  args <- getArgs
+  let (path, showTree) = calculateArgs args
 
   handle <- openFile path ReadMode
   input <- hGetContents handle
@@ -54,6 +60,7 @@ main = do
     Left err -> pPrint $ "Parse error: " ++ show err
     Right (sexps, []) -> do
       (envR, rR) <- runResolveM (resolveMany sexps) (ExtendEnvironment (frameEnvironment stdEnv) EmptyEnvironment)
+      when showTree $ pPrint rR
 
       result <- umlMany (rR, envR, Nothing)
 
@@ -88,6 +95,6 @@ collectErrors = foldr collect []
       (RPrimitiveCall (RPrimitiveCallIO _ _ args)) -> collectErrors args ++ acc
       (RPrimitiveCall (RPrimitiveCallPure _ _ args)) -> collectErrors args ++ acc
       (RLambda _ _ _ body) -> collectErrors body ++ acc
-      (RLambdaCall _ _ args) -> collectErrors args ++ acc
+      (RLambdaCall _ args) -> collectErrors args ++ acc
       (RResolveError _) -> e : acc
       _ -> acc

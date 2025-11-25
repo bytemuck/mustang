@@ -83,7 +83,7 @@ stackShow (RPrimitiveCall (RPrimitiveCallPure name _ _), tabs, ea, env) = do
 stackShow (RPrimitiveCall (RPrimitiveCallIO name _ _), tabs, ea, env) = do
   let newParams = zipWith (\x y -> "P" ++ x ++ " = " ++ stackShow (y, tabs, ea, env)) (map show [(1 :: Integer) ..]) ea
   tabString tabs ++ name ++ " : [" ++ intercalate ", " newParams ++ "]"
-stackShow (RLambdaCall _ name _, tabs, ea, env) = do
+stackShow (RLambdaCall name _, tabs, ea, env) = do
   (newName, names) <- case lookupEnvironment' env name of
     RLambda _ newName paramNames _ -> return (newName, paramNames)
     RPrimitive (RPrimitivePure newName _) -> return (newName, map (\x -> 'P' : show x) [(1 :: Integer) ..])
@@ -153,7 +153,7 @@ eval l@(RLambda _ name _ _) = do
   env <- getEnv
   setEnv $ addBinding env name l
   return l
-eval p@(RLambdaCall _ name params) = do
+eval p@(RLambdaCall name params) = do
   handle <- getHandle
   env <- getEnv
   let stackSize = countScope env
