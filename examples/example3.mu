@@ -9,4 +9,4 @@
             prices))
     (reduce + prices-with-tax))
 
-(calculate (list 100 5 15) 1)
+(calculate (list 100 5 15) t)

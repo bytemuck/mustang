@@ -163,7 +163,8 @@ primitives =
     ("tail", RPrimitive $ RPrimitivePure "tail" pTail),
     (":", RPrimitive $ RPrimitivePure ":" pCons),
     ("++", RPrimitive $ RPrimitivePure ":" pConcat),
-    ("null", RPrimitive $ RPrimitivePure "null" pNull)
+    ("null", RPrimitive $ RPrimitivePure "null" pNull),
+    ("t", RValue $ RBoolean True)
   ]
 
 resolve :: LocatedSExp -> ResolveM RExp RExp
