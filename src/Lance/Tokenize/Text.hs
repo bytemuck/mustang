@@ -1,4 +1,4 @@
-module Mustang.Parser.Text
+module Lance.Tokenize.Text
   ( alpha,
     digit,
     alphaNum,
@@ -10,8 +10,8 @@ where
 
 import Control.Applicative (Alternative (many, (<|>)))
 import Data.Char (isAlpha, isDigit)
-import Mustang.Parser (ParserM)
-import Mustang.Parser.Primitive (satisfy, token)
+import Lance.Tokenize.Primitive (satisfy, token)
+import Lance.Tokenize.Tokenize (ParserM)
 
 alpha :: ParserM Char Char
 alpha = satisfy isAlpha

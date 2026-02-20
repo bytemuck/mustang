@@ -1,5 +1,5 @@
-module Resolve
-  ( RExp (..),
+module Lance.Resolve.Resolve
+  ( RExpr (..),
     ResolveM (..),
     resolve,
     resolveMany,
@@ -7,16 +7,24 @@ module Resolve
   )
 where
 
-import Control.Monad
-import Control.Monad.IO.Class
-import Data.List
+import Control.Monad (ap)
+import Control.Monad.IO.Class (MonadIO (..))
+import Data.List (intercalate)
 import Data.Map qualified as Map
-import Env
-import RExp
-import SExp
-import Text.Pretty.Simple (pPrint)
+import Lance.Evaluate.Env (Environment (..), addBinding, lookupEnvironment)
+import Lance.Resolve.ResolvedExpr
+  ( RExpr (..),
+    RPrimitive (RPrimitiveIO, RPrimitivePure),
+    RPrimitiveCall (RPrimitiveCallIO, RPrimitiveCallPure),
+    RValue (RBoolean, RList, RNumber, RString),
+  )
+import Lance.Tokenize.TokenizedExpr
+  ( LocatedTExpr (LocatedTExpr),
+    TAtom (Identifier, Number, String),
+    TExpr (Atom, List),
+  )
 
-coreEnvironment :: Environment RExp
+coreEnvironment :: Environment RExpr
 coreEnvironment = ExtendEnvironment (Map.fromList primitives) EmptyEnvironment
 
 newtype ResolveM a b = ResolveM {runResolveM :: Environment a -> IO (Environment a, b)}
@@ -57,14 +65,7 @@ instance MonadIO (ResolveM a) where
     x <- action
     pure (env, x)
 
-pShow :: RExp -> String
-pShow (RValue (RNumber n)) = show n
-pShow (RValue (RString n)) = n
-pShow (RValue (RBoolean n)) = show n
-pShow (RValue (RList p)) = "(" ++ intercalate ", " (map pShow p) ++ ")"
-pShow _ = "<what?>"
-
-pBinary :: ([Integer] -> Integer) -> String -> ([RExp] -> RExp)
+pBinary :: ([Integer] -> Integer) -> String -> ([RExpr] -> RExpr)
 pBinary fn name = \case
   [] -> RResolveError $ name ++ " needs at least one parameter."
   exprs ->
@@ -72,80 +73,80 @@ pBinary fn name = \case
       Left err -> RResolveError err
       Right nums -> RValue (RNumber $ fn nums)
     where
-      extractNumber :: RExp -> Either String Integer
+      extractNumber :: RExpr -> Either String Integer
       extractNumber (RValue (RNumber n)) = Right n
       extractNumber _ = Left $ name ++ " can only have numbers as parameters."
 
-pSum :: [RExp] -> RExp
+pSum :: [RExpr] -> RExpr
 pSum = pBinary sum "(+)"
 
-pProduct :: [RExp] -> RExp
+pProduct :: [RExpr] -> RExpr
 pProduct = pBinary product "(*)"
 
-pQuotiant :: [RExp] -> RExp
+pQuotiant :: [RExpr] -> RExpr
 pQuotiant = pBinary (foldl1 div) "(/)"
 
-pDifference :: [RExp] -> RExp
+pDifference :: [RExpr] -> RExpr
 pDifference = pBinary (foldl1 (-)) "(-)"
 
-pList :: [RExp] -> RExp
+pList :: [RExpr] -> RExpr
 pList l = RValue $ RList l
 
-pCompare :: (Integer -> Integer -> Bool) -> String -> [RExp] -> RExp
+pCompare :: (Integer -> Integer -> Bool) -> String -> [RExpr] -> RExpr
 pCompare fn name = \case
   [RValue (RNumber l), RValue (RNumber r)] -> RValue $ RBoolean (l `fn` r)
   _ -> RResolveError $ name ++ " can only compare numbers."
 
-pEqual :: [RExp] -> RExp
+pEqual :: [RExpr] -> RExpr
 pEqual = pCompare (==) ">"
 
-pGreater :: [RExp] -> RExp
+pGreater :: [RExpr] -> RExpr
 pGreater = pCompare (>) ">"
 
-pLess :: [RExp] -> RExp
+pLess :: [RExpr] -> RExpr
 pLess = pCompare (<) ">"
 
-pGreaterEqual :: [RExp] -> RExp
+pGreaterEqual :: [RExpr] -> RExpr
 pGreaterEqual = pCompare (>=) ">"
 
-pLessEqual :: [RExp] -> RExp
+pLessEqual :: [RExpr] -> RExpr
 pLessEqual = pCompare (<=) ">"
 
-pPrintPrim :: [RExp] -> IO RExp
+pPrintPrim :: [RExpr] -> IO RExpr
 pPrintPrim exprs = do
-  putStr $ intercalate ", " (map pShow exprs)
+  putStr $ intercalate ", " (map show exprs)
   return RNil
 
-pPrintfnPrim :: [RExp] -> IO RExp
+pPrintfnPrim :: [RExpr] -> IO RExpr
 pPrintfnPrim exprs = do
-  putStrLn $ intercalate ", " (map pShow exprs)
+  putStrLn $ intercalate ", " (map show exprs)
   return RNil
 
-pHead :: [RExp] -> RExp
+pHead :: [RExpr] -> RExpr
 pHead [RValue (RList [])] = RNil
-pHead [RValue (RList l)] = head l
+pHead [RValue (RList (l : _))] = l
 pHead _ = RNil
 
-pTail :: [RExp] -> RExp
+pTail :: [RExpr] -> RExpr
 pTail [RValue (RList [])] = RNil
-pTail [RValue (RList l)] = RValue $ RList $ tail l
+pTail [RValue (RList (_ : l))] = RValue $ RList l
 pTail _ = RNil
 
-pCons :: [RExp] -> RExp
+pCons :: [RExpr] -> RExpr
 pCons [v, RValue (RList r)] = RValue $ RList $ v : r
 pCons [v, RNil] = RValue $ RList [v]
 pCons _ = RNil
 
-pConcat :: [RExp] -> RExp
+pConcat :: [RExpr] -> RExpr
 pConcat [RValue (RList l), RValue (RList r)] = RValue $ RList $ l ++ r
 pConcat _ = RNil
 
-pNull :: [RExp] -> RExp
+pNull :: [RExpr] -> RExpr
 pNull [RNil] = RValue $ RBoolean True
 pNull [RValue (RList [])] = RValue $ RBoolean True
 pNull _ = RValue $ RBoolean False
 
-primitives :: [(String, RExp)]
+primitives :: [(String, RExpr)]
 primitives =
   [ ("+", RPrimitive $ RPrimitivePure "+" pSum),
     ("*", RPrimitive $ RPrimitivePure "*" pProduct),
@@ -158,40 +159,39 @@ primitives =
     ("<=", RPrimitive $ RPrimitivePure "<=" pLessEqual),
     ("list", RPrimitive $ RPrimitivePure "list" pList),
     ("print", RPrimitive $ RPrimitiveIO "print" pPrintPrim),
-    ("printfn", RPrimitive $ RPrimitiveIO "printfn" pPrintfnPrim),
+    ("println", RPrimitive $ RPrimitiveIO "println" pPrintfnPrim),
     ("head", RPrimitive $ RPrimitivePure "head" pHead),
     ("tail", RPrimitive $ RPrimitivePure "tail" pTail),
     (":", RPrimitive $ RPrimitivePure ":" pCons),
-    ("++", RPrimitive $ RPrimitivePure ":" pConcat),
-    ("null", RPrimitive $ RPrimitivePure "null" pNull),
-    ("t", RValue $ RBoolean True)
+    ("++", RPrimitive $ RPrimitivePure "++" pConcat),
+    ("null", RPrimitive $ RPrimitivePure "null" pNull)
   ]
 
-resolve :: LocatedSExp -> ResolveM RExp RExp
-resolve (LocatedSExp _ (Atom (Number n))) = return $ RValue $ RNumber n
-resolve (LocatedSExp _ (Atom (String s))) = return $ RValue $ RString s
-resolve (LocatedSExp _ (Atom (Identifier "nil"))) = return RNil
-resolve (LocatedSExp _ (Atom (Identifier name))) = do
+resolve :: LocatedTExpr -> ResolveM RExpr RExpr
+resolve (LocatedTExpr _ (Atom (Number n))) = return $ RValue $ RNumber n
+resolve (LocatedTExpr _ (Atom (String s))) = return $ RValue $ RString s
+resolve (LocatedTExpr _ (Atom (Identifier "nil"))) = return RNil
+resolve (LocatedTExpr _ (Atom (Identifier name))) = do
   env <- getEnv
   case lookupEnvironment env name of
     Just _ -> return $ RBinding name
     Nothing -> return $ RResolveError $ "Unbound variable '" ++ name ++ "'"
-resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "do")) : body))) = do
+resolve (LocatedTExpr _ (List (LocatedTExpr _ (Atom (Identifier "do")) : body))) = do
   newEnv <- getEnv
   bodies <- withEnv newEnv $ mapM resolve body
   return $ RDo bodies
-resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "if")) : predicate : truty : [falsy]))) = do
+resolve (LocatedTExpr _ (List (LocatedTExpr _ (Atom (Identifier "if")) : predicate : truty : [falsy]))) = do
   newEnv <- getEnv
   p <- withEnv newEnv $ resolve predicate
   t <- withEnv newEnv $ resolve truty
   f <- withEnv newEnv $ resolve falsy
   return $ RIf p t f
-resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "when")) : predicate : [truty]))) = do
+resolve (LocatedTExpr _ (List (LocatedTExpr _ (Atom (Identifier "when")) : predicate : [truty]))) = do
   newEnv <- getEnv
   p <- withEnv newEnv $ resolve predicate
   t <- withEnv newEnv $ resolve truty
   return $ RIf p t RNil
-resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "set")) : LocatedSExp _ (Atom (Identifier name)) : [value]))) = do
+resolve (LocatedTExpr _ (List (LocatedTExpr _ (Atom (Identifier "set")) : LocatedTExpr _ (Atom (Identifier name)) : [value]))) = do
   env <- getEnv
   case lookupEnvironment env name of
     Just _ -> do
@@ -199,13 +199,13 @@ resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "set")) : LocatedS
       setEnv $ addBinding env name resolvedValue
       return $ RSet name resolvedValue
     Nothing -> return $ RResolveError $ "Unbound variable '" ++ name ++ "'"
-resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "let")) : LocatedSExp _ (Atom (Identifier name)) : [value]))) = do
+resolve (LocatedTExpr _ (List (LocatedTExpr _ (Atom (Identifier "let")) : LocatedTExpr _ (Atom (Identifier name)) : [value]))) = do
   env <- getEnv
   resolvedValue <- resolve value
   setEnv $ addBinding env name resolvedValue
   return $ RLet name resolvedValue
-resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "defun")) : LocatedSExp _ (Atom (Identifier name)) : LocatedSExp _ (List params) : body))) = do
-  let paramNames = [p | LocatedSExp _ (Atom (Identifier p)) <- params]
+resolve (LocatedTExpr _ (List (LocatedTExpr _ (Atom (Identifier "defun")) : LocatedTExpr _ (Atom (Identifier name)) : LocatedTExpr _ (List params) : body))) = do
+  let paramNames = [p | LocatedTExpr _ (Atom (Identifier p)) <- params]
   env <- getEnv
   let partialEnv = addBinding env name (RLambda True name paramNames [])
   let lambdaEnv = foldl (\acc p -> addBinding acc p (RParameter p)) partialEnv paramNames
@@ -227,7 +227,7 @@ resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier "defun")) : Locate
         (RPrimitiveCall (RPrimitiveCallPure _ _ rexprs')) -> all (checkPure oldEnv) rexprs'
         (RLambdaCall _ rexprs') -> all (checkPure oldEnv) rexprs'
         _ -> True
-resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier name)) : args))) = do
+resolve (LocatedTExpr _ (List (LocatedTExpr _ (Atom (Identifier name)) : args))) = do
   env <- getEnv
   resolvedArgs <- withEnv env $ mapM resolve args
   case lookupEnvironment env name of
@@ -238,5 +238,5 @@ resolve (LocatedSExp _ (List (LocatedSExp _ (Atom (Identifier name)) : args))) =
     _ -> return $ RResolveError $ "Could not resolve " ++ name ++ " with " ++ show resolvedArgs
 resolve expr = return $ RResolveError $ show expr
 
-resolveMany :: [LocatedSExp] -> ResolveM RExp [RExp]
+resolveMany :: [LocatedTExpr] -> ResolveM RExpr [RExpr]
 resolveMany = mapM resolve

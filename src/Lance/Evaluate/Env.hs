@@ -1,4 +1,4 @@
-module Env
+module Lance.Evaluate.Env
   ( Environment (..),
     lookupEnvironment,
     lookupEnvironment1,

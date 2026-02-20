@@ -1,43 +1,50 @@
 module Main where
 
-import Control.Applicative
-import Data.List (group, sort)
-import Env
+import Control.Applicative (Alternative (many))
+import Lance.Evaluate.Env
   ( Environment (EmptyEnvironment, ExtendEnvironment),
     frameEnvironment,
   )
-import Evaluate (EvalM (runEvalM), evalMany)
-import GHC.Base (when)
-import Lex
-import Mustang.Parser
-import RExp
-import Resolve
+import Lance.Evaluate.Evaluate (EvalM (runEvalM), evalMany)
+import Lance.Resolve.Resolve
+  ( ResolveM (runResolveM),
+    coreEnvironment,
+    resolveMany,
+  )
+import Lance.Resolve.ResolvedExpr
+  ( RExpr
+      ( RDo,
+        RIf,
+        RLambda,
+        RLambdaCall,
+        RLet,
+        RPrimitiveCall,
+        RResolveError,
+        RSet,
+        RValue
+      ),
+    RPrimitiveCall (RPrimitiveCallIO, RPrimitiveCallPure),
+    RValue (RList),
+  )
+import Lance.Tokenize.Lex (expression)
+import Lance.Tokenize.Tokenize (runParserM)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import System.IO
-import Text.Pretty.Simple
-import UML
-
-rmdups :: (Ord a) => [a] -> [a]
-rmdups = map head . group . sort
-
-calculateArgs :: [String] -> (String, Bool)
-calculateArgs (path : "showtree" : _) = (path, True)
-calculateArgs (path : _) = (path, False)
+import System.IO (IOMode (ReadMode), hGetContents, openFile)
+import Text.Pretty.Simple (pPrint)
 
 main :: IO ()
 main = do
-  args <- getArgs
-  let (path, showTree) = calculateArgs args
+  [path] <- getArgs
 
   handle <- openFile path ReadMode
   input <- hGetContents handle
 
-  mapHandle <- openFile "resources/std/map.mu" ReadMode
+  mapHandle <- openFile "resources/std/map.lance" ReadMode
   mapInput <- hGetContents mapHandle
   parsedMap <- runParserM (many expression) mapInput
 
-  reduceHandle <- openFile "resources/std/reduce.mu" ReadMode
+  reduceHandle <- openFile "resources/std/reduce.lance" ReadMode
   reduceInput <- hGetContents reduceHandle
   parsedReduce <- runParserM (many expression) reduceInput
 
@@ -50,32 +57,14 @@ main = do
 
   parsed <- runParserM (many expression) input
 
-  umlHandle <- openFile "output/uml.txt" WriteMode
-  hSetFileSize umlHandle 0
-
-  stackHandle <- openFile "output/stack.txt" WriteMode
-  hSetFileSize stackHandle 0
-
   case parsed of
     Left err -> pPrint $ "Parse error: " ++ show err
     Right (sexps, []) -> do
-      (envR, rR) <- runResolveM (resolveMany sexps) (ExtendEnvironment (frameEnvironment stdEnv) EmptyEnvironment)
-      when showTree $ pPrint rR
-
-      result <- umlMany (rR, envR, Nothing)
-
-      let (bodies, links) = (concatMap fst' result, concatMap snd' result)
-
-      hPutStrLn umlHandle bodies
-      hPutStrLn umlHandle $ concat (rmdups links)
-      hFlush stackHandle
-      hClose umlHandle
+      (_, rR) <- runResolveM (resolveMany sexps) (ExtendEnvironment (frameEnvironment stdEnv) EmptyEnvironment)
 
       case collectErrors rR of
         [] -> do
-          _ <- runEvalM (evalMany (mapR ++ redR ++ rR)) (coreEnvironment, stackHandle)
-          hFlush stackHandle
-          hClose stackHandle
+          _ <- runEvalM (evalMany (mapR ++ redR ++ rR)) coreEnvironment
           return ()
         e -> do
           pPrint e
@@ -83,7 +72,7 @@ main = do
     Right (_, rest) -> do
       pPrint $ "Could not parse the entire program. Missing: \n" ++ rest
 
-collectErrors :: [RExp] -> [RExp]
+collectErrors :: [RExpr] -> [RExpr]
 collectErrors = foldr collect []
   where
     collect e acc = case e of

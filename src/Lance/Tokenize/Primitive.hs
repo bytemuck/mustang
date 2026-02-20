@@ -1,4 +1,4 @@
-module Mustang.Parser.Primitive
+module Lance.Tokenize.Primitive
   ( satisfy,
     anyToken,
     token,
@@ -9,9 +9,14 @@ module Mustang.Parser.Primitive
   )
 where
 
-import Control.Monad.Except
-import Control.Monad.State
-import Mustang.Parser
+import Control.Monad.Except (MonadError (throwError))
+import Control.Monad.State (MonadState (get, put))
+import Lance.Tokenize.Tokenize
+  ( ParseError (UnexpectedEOI, UnexpectedToken),
+    ParserM,
+    ParserState (psCol, psInput, psLine),
+    updatePosition,
+  )
 
 satisfy :: (Char -> Bool) -> ParserM Char Char
 satisfy p = do

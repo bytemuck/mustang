@@ -1,4 +1,4 @@
-module Mustang.Parser
+module Lance.Tokenize.Tokenize
   ( ParserM (..),
     ParseError (..),
     ParserState (..),
@@ -9,10 +9,18 @@ module Mustang.Parser
   )
 where
 
-import Control.Applicative
+import Control.Applicative (Alternative (empty, (<|>)))
 import Control.Monad.Except
-import Control.Monad.IO.Class
+  ( ExceptT (..),
+    MonadError (throwError),
+    runExceptT,
+  )
+import Control.Monad.IO.Class (MonadIO (..))
 import Control.Monad.State
+  ( MonadState (get, put),
+    StateT (..),
+    gets,
+  )
 
 data ParseError e
   = UnexpectedEOI Integer Integer
