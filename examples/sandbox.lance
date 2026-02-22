@@ -1,8 +1,4 @@
-(map println (list 1 2 3))
-(println (reduce + (list 1 2 3)))
-
-(defun double (x)
-    (* x)
+(if (= 2 2) 
+    (+ 2 5 8)
+    (+ 6 7 9)
 )
-
-(let z 3)

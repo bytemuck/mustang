@@ -1,11 +1,13 @@
 module Main where
 
 import Control.Applicative (Alternative (many))
+import Lance.Compile.Compile (lowerIR)
 import Lance.Evaluate.Env
   ( Environment (EmptyEnvironment, ExtendEnvironment),
     frameEnvironment,
   )
 import Lance.Evaluate.Evaluate (EvalM (runEvalM), evalMany)
+import Lance.IRCompile.IRCompile (compileProgram)
 import Lance.Resolve.Resolve
   ( ResolveM (runResolveM),
     coreEnvironment,
@@ -29,7 +31,6 @@ import Lance.Resolve.ResolvedExpr
 import Lance.Tokenize.Lex (expression)
 import Lance.Tokenize.Tokenize (runParserM)
 import System.Environment (getArgs)
-import System.Exit (exitFailure)
 import System.IO (IOMode (ReadMode), hGetContents, openFile)
 import Text.Pretty.Simple (pPrint)
 
@@ -40,31 +41,28 @@ main = do
   handle <- openFile path ReadMode
   input <- hGetContents handle
 
-  mapHandle <- openFile "resources/std/map.lance" ReadMode
-  mapInput <- hGetContents mapHandle
-  parsedMap <- runParserM (many expression) mapInput
-
-  reduceHandle <- openFile "resources/std/reduce.lance" ReadMode
-  reduceInput <- hGetContents reduceHandle
-  parsedReduce <- runParserM (many expression) reduceInput
-
-  (stdEnv, mapR, redR) <- case (parsedMap, parsedReduce) of
-    (Right mapP, Right redP) -> do
-      (mapEnv, mapResolved) <- runResolveM (resolveMany $ fst mapP) coreEnvironment
-      (redEnv, redResolved) <- runResolveM (resolveMany $ fst redP) (ExtendEnvironment (frameEnvironment mapEnv) EmptyEnvironment)
-      return (redEnv, mapResolved, redResolved)
-    _ -> exitFailure
-
   parsed <- runParserM (many expression) input
 
   case parsed of
     Left err -> pPrint $ "Parse error: " ++ show err
     Right (sexps, []) -> do
-      (_, rR) <- runResolveM (resolveMany sexps) (ExtendEnvironment (frameEnvironment stdEnv) EmptyEnvironment)
+      (_, rR) <- runResolveM (resolveMany sexps) (ExtendEnvironment (frameEnvironment coreEnvironment) EmptyEnvironment)
+
+      let (consts, instrs, labels, _) = compileProgram rR
+
+      -- print line by line, and align arguments
+      -- pPrint consts
+      -- pPrint labels
+      -- pPrint instrs
+
+      let (loweredConsts, loweredInstrs) = lowerIR labels (consts, instrs)
+
+      pPrint loweredConsts
+      pPrint loweredInstrs
 
       case collectErrors rR of
         [] -> do
-          _ <- runEvalM (evalMany (mapR ++ redR ++ rR)) coreEnvironment
+          _ <- runEvalM (evalMany rR) coreEnvironment
           return ()
         e -> do
           pPrint e
